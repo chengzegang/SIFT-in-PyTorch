@@ -38,7 +38,21 @@ def _chunk_topk(X, k, largest=True, chunk_size=64):
         
     return torch.cat(dists, dim=0), torch.cat(indices, dim=0)
 
-
+def sample_descriptors(kps, descs, size=512):
+    # uniform sampling to get desired number of descriptors
+    if len(kps) > size:
+        idx = torch.randperm(len(kps))[:size]
+        kps = kps[idx]
+        descs = descs[idx]
+    else:
+        diff = size - len(kps)
+        indices = torch.arange(len(kps))
+        times = diff // len(kps)
+        indices = indices.repeat(times + 1)
+        indices = indices[torch.randperm(len(indices))][:diff]
+        kps = torch.cat([kps, kps[indices]])
+        descs = torch.cat([descs, descs[indices]])
+    return kps, descs
 
 def pairwise_match(index, query, thr=0.7):
     '''
@@ -151,18 +165,18 @@ def ransac(kps1, kps2, its: int = 32, ratio: float = 0.6):
     
     H, _, _, _ = torch.linalg.lstsq(sample_X, sample_Y) # frobinous norm, it is equivalent to minimize ||AX - Y||_F for each X
 
-    YH = torch.matmul(X, H)
 
-    error = torch.norm(Y - YH, 2, dim=(-1, -2))
+    YH = X.unsqueeze(1) @ H
+
+    error = torch.norm(Y.unsqueeze(1) - YH, 2, dim=(-1, -2))
 
     min_index = torch.argmin(error, dim=-1)
-    
-    H = H[:, min_index]
-    H = H.view(-1, 3, 3)
 
+    del sample_X, sample_Y, YH, error
     
+    H = H[torch.arange(B), min_index]
+
     error = torch.norm(Y - X @ H, 2, dim=-1)
-
 
     thr = torch.mean(error, dim=-1, keepdim=True)
     inliers = error < thr
