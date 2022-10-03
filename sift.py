@@ -59,7 +59,7 @@ def pairwise_match(index, query, thr=0.7):
     dists, indices = _chunk_topk(d_matrix, 2, largest=False) 
     
     # (N, M, D1)  matches[i, j, k] = True if index image i with descriptor j passed the ratio test with query image k
-    matches = dists[..., 0] < 0.9 * dists[..., 1] # (N, D)
+    matches = dists[..., 0] < thr * dists[..., 1] # (N, D)
 
     print(matches.shape)
     
@@ -92,7 +92,7 @@ def listwise_match(index, query, thr=0.7):
     # (N, D, 2)  indices[i, j, k] = m -> index image i with descriptor j has top the kth smallest distances with query image i with descriptor m
     dists, indices = _chunk_topk(d_matrix, 2, largest=False) 
     # (N, D)  matches[i, j] = True if index image i with descriptor j passed the ratio test
-    matches = dists[..., 0] < 0.9 * dists[..., 1] # (N, D)
+    matches = dists[..., 0] < thr * dists[..., 1] # (N, D)
     n_matches = torch.sum(matches, dim=-1) # (N, ) number of matches for each image
     full_rank = n_matches >= 4 # (N, ) True if image has at least 4 matches
     possible = matches & full_rank.unsqueeze(-1) # (N, D) True if image has at least 4 matches and descriptor j passed the ratio test
@@ -164,8 +164,7 @@ def ransac(kps1, kps2, its: int = 32, ratio: float = 0.6):
     error = torch.norm(Y - X @ H, 2, dim=-1)
 
 
-    median_error = torch.median(error, dim=-1, keepdim=True).values
-    thr = median_error
+    thr = torch.mean(error, dim=-1, keepdim=True)
     inliers = error < thr
 
     selected_X = X[inliers]
