@@ -122,6 +122,12 @@ def listwise_match(index, query, thr=0.7):
     return idx_idesc_qdesc
 
 
+def trace(example_inputs):
+    def wrapper(func):
+        return torch.jit.trace(func, example_inputs)
+    return wrapper
+
+
 @torch.jit.script
 def ikp_qkp(ikps, qkps, idx_idesc_qdesc):
 
