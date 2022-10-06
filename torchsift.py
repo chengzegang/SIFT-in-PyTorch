@@ -1,18 +1,35 @@
 
 from __future__ import annotations
-from typing import Tuple
+from typing import BinaryIO, Literal, Text, Tuple
 import torch
 import cv2
 from torchvision.transforms.functional import pil_to_tensor, to_pil_image
 from torchvision.utils import draw_keypoints
 from PIL import Image
+import numpy as np
+import io
 import math
 
-def detect(image: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+def detect(image_like: torch.Tensor | np.ndarray | str | bytes | BinaryIO, input_shape: Literal['CHW', 'HWC'] = 'CHW', input_channels: Literal['RGB', 'BGR'] = 'RGB') -> Tuple[torch.Tensor, torch.Tensor]:
+    image = None
+    if isinstance(image_like, torch.Tensor):
+        if input_shape == 'CHW':
+            image_like = image_like.transpose(0, 2)
+        image = image_like.numpy()
+    if isinstance(image_like, np.ndarray):
+        if input_shape == 'CHW':
+            image_like = image_like.transpose(0, 2)
+        image = image_like
+    if isinstance(image_like, str):
+        image = cv2.imread(image_like)
+    if isinstance(image_like, bytes):
+        buff = io.BytesIO(image_like)
+        image = cv2.imdecode(buff, cv2.IMREAD_COLOR)
+    if isinstance(image_like, BinaryIO):
+        image = cv2.imdecode(image_like, cv2.IMREAD_COLOR)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB) if input_channels == 'RGB' else image
     
-    image = image.transpose(0, -1)
-    image = image.numpy()
-    image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) if input_channels == 'RGB' else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     
     keypoints, descriptors = cv2.SIFT_create().detectAndCompute(image, None)
 
@@ -38,7 +55,9 @@ def _chunk_topk(X, k, largest=True, chunk_size=64):
         
     return torch.cat(dists, dim=0), torch.cat(indices, dim=0)
 
-def sample_descriptors(kps, descs, size=512):
+
+
+def sample(kps, descs, size=512):
     # uniform sampling to get desired number of descriptors
     if len(kps) > size:
         idx = torch.randperm(len(kps))[:size]
@@ -54,6 +73,32 @@ def sample_descriptors(kps, descs, size=512):
         descs = torch.cat([descs, descs[indices]])
     return kps, descs
 
+def sample_batch(batch_kps, batch_descs, size=512):
+    # uniform sampling to get desired number of descriptors
+    B = len(batch_kps)
+    res_batcch_kps = []
+    res_batch_descs = []
+    for i in range(B):
+        kps = batch_kps[i]
+        descs = batch_descs[i]
+        if len(kps) > size:
+            idx = torch.randperm(len(kps))[:size]
+            kps = kps[idx]
+            descs = descs[idx]
+        else:
+            diff = size - len(kps)
+            indices = torch.arange(len(kps))
+            times = diff // len(kps) + 1
+            indices = indices.repeat(times)
+            indices = indices[torch.randperm(len(indices))][:diff]
+            kps = torch.cat([kps, kps[indices]])
+            descs = torch.cat([descs, descs[indices]])
+        res_batcch_kps.append(kps)
+        res_batch_descs.append(descs)
+    res_batcch_kps = torch.stack(res_batcch_kps)
+    res_batch_descs = torch.stack(res_batch_descs)
+    return res_batcch_kps, res_batch_descs
+
 def pairwise_match(index, query, thr=0.7):
     '''
     index: (N, D1, F) N: number of images, D: number of descriptors, F: descriptor dimension
@@ -65,6 +110,8 @@ def pairwise_match(index, query, thr=0.7):
     sum_ = torch.sum(index)
     sum_ += torch.sum(query)
     mean_ = sum_ / (torch.numel(index) + torch.numel(query))
+    index = index / mean_
+    query = query / mean_
 
     # (N, M, D1, D2)  d_matrix[i, j, k, l] = distance between index[i, k] and query[j, l]
     d_matrix = torch.cdist(index.unsqueeze(1), query.unsqueeze(0)) 
@@ -75,11 +122,10 @@ def pairwise_match(index, query, thr=0.7):
     # (N, M, D1)  matches[i, j, k] = True if index image i with descriptor j passed the ratio test with query image k
     matches = dists[..., 0] < thr * dists[..., 1] # (N, D)
 
-    print(matches.shape)
     
     # (K, 3) idx_idesc_qdesc[i] = (j, k, l) -> the ith matched descriptor is from index image j with descriptor k and query image l
     i_q_idesc = torch.argwhere(matches)
-    print(matches.shape)
+    
     # (K, 1) qdesc[i] = m  -> the ith matched descriptor is from query image l with descriptor m
     qdesc = indices[matches][:, [0]]
 
@@ -89,7 +135,7 @@ def pairwise_match(index, query, thr=0.7):
 
 
 
-def listwise_match(index, query, thr=0.7):
+def listwise_match(index: torch.Tensor, query: torch.Tensor, thr: float = 0.7, full_rank_thr: int = 8) -> torch.Tensor:
     '''
     index: (N, D1, F) N: number of images, D: number of descriptors, F: descriptor dimension
     query: (N, D2, F) N: number of queries, D: number of descriptors, F: descriptor dimension
@@ -100,6 +146,8 @@ def listwise_match(index, query, thr=0.7):
     sum_ = torch.sum(index)
     sum_ += torch.sum(query)
     mean_ = sum_ / (torch.numel(index) + torch.numel(query))
+    index = index / mean_
+    query = query / mean_
 
     d_matrix = torch.cdist(index, query) # (i, j, k)  d_matrix[i, j, k] = distance between index[i, j] and query[i, k]
 
@@ -108,7 +156,7 @@ def listwise_match(index, query, thr=0.7):
     # (N, D)  matches[i, j] = True if index image i with descriptor j passed the ratio test
     matches = dists[..., 0] < thr * dists[..., 1] # (N, D)
     n_matches = torch.sum(matches, dim=-1) # (N, ) number of matches for each image
-    full_rank = n_matches >= 4 # (N, ) True if image has at least 4 matches
+    full_rank = n_matches >= full_rank_thr # (N, ) True if image has at least 4 matches
     possible = matches & full_rank.unsqueeze(-1) # (N, D) True if image has at least 4 matches and descriptor j passed the ratio test
     
     # (M, 2) idx_idesc[i] = (j, k) -> the ith matched descriptor is from index image j with descriptor k
@@ -150,14 +198,14 @@ def ikp_qkp(ikps, qkps, idx_idesc_qdesc):
 @torch.jit.script
 def ransac(kps1, kps2, its: int = 32, ratio: float = 0.6):
     
-    B, N, F = kps1.shape
+    B, N, K = kps1.shape # B: number of images, N: number of keypoints, K: keypoint dimension
     
     rasac_size = math.ceil(N * ratio)
 
     perm = [torch.randperm(N) for _ in range(its)]
     perm = torch.stack(perm)
 
-    perm = perm[:, :rasac_size].cuda()
+    perm = perm[:, :rasac_size].to(kps1.device)
     
 
     pad = torch.ones((B, N, 1))
@@ -186,14 +234,63 @@ def ransac(kps1, kps2, its: int = 32, ratio: float = 0.6):
 
     thr = torch.mean(error, dim=-1, keepdim=True)
     inliers = error < thr
-
+    
+    
     selected_X = X[inliers]
     selected_Y = Y[inliers]
-
     selected_X = selected_X[:, :2] / selected_X[:, 2:]
     selected_Y = selected_Y[:, :2] / selected_Y[:, 2:]
+    selected_X_indices = torch.nonzero(inliers)
+    selected_Y_indices = torch.nonzero(inliers)
+    selected_X = torch.cat([selected_X_indices, selected_X], dim=-1)
+    selected_Y = torch.cat([selected_Y_indices, selected_Y], dim=-1)
 
     return H, selected_X, selected_Y
+
+
+@torch.jit.script
+def ransac_count(kps1, kps2, its: int = 32, ratio: float = 0.6):
+    
+    B, N, K = kps1.shape # B: number of images, N: number of keypoints, K: keypoint dimension
+    
+    rasac_size = math.ceil(N * ratio)
+
+    perm = [torch.randperm(N) for _ in range(its)]
+    perm = torch.stack(perm)
+
+    perm = perm[:, :rasac_size].to(kps1.device)
+    
+
+    pad = torch.ones((B, N, 1))
+
+    X = torch.cat([kps1, pad], dim=-1).cuda()
+    Y = torch.cat([kps2, pad], dim=-1).cuda()
+
+    sample_X = X[:, perm] 
+    sample_Y = Y[:, perm] # ransac_its x rasac_size x 3
+
+    H, _, _, _ = torch.linalg.lstsq(sample_X, sample_Y) # frobinous norm, it is equivalent to minimize ||AX - Y||_F for each X
+
+
+    YH = X.unsqueeze(1) @ H
+
+    error = torch.norm(Y.unsqueeze(1) - YH, 2, dim=(-1, -2))
+
+    min_index = torch.argmin(error, dim=-1)
+
+    del sample_X, sample_Y, YH, error
+    
+    H = H[torch.arange(B), min_index]
+
+    error = torch.norm(Y - X @ H, 2, dim=-1)
+
+    thr = torch.mean(error, dim=-1, keepdim=True)
+    inliers = error < thr
+
+    selected_X_indices = torch.nonzero(inliers)
+    images_indices = selected_X_indices[:, 0]
+    uniques, count = torch.unique_consecutive(images_indices, return_counts=True)
+    return uniques, count
 
 
 def visualize_keypoints(image, keypoints, color='red', radius=2):
