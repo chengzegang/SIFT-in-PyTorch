@@ -1,6 +1,6 @@
 [project]
-name = "TorchSIFT"
-version = "0.0a0.1"
+name = "torchsift"
+version = "0.1a1"
 authors = [
   { name="Zegang Cheng", email="zc2309@nyu.edu" },
 ]
@@ -28,3 +28,4 @@ requires = [
     "setuptools"
     ]
 build-backend = "setuptools.build_meta"
+

@@ -2,8 +2,8 @@ from setuptools import find_packages, setup
 
 setup(
     name="torchsift",
-    version="0.0.1.dev1",
-    description="A Pytorch implementation of SIFT BFMatcher and RANSAC",
+    version="0.1a1",
+    description="A Pytorch implementation of sift brute-force matcher and RANSAC",
     author="Zegang Cheng",
     author_email="zc2309@nyu.edu",
     url="https://github.com/chengzegang/TorchSIFT",
