@@ -20,6 +20,7 @@ def detect(
     image_like: torch.Tensor | np.ndarray | str | Path | bytes | BinaryIO,
     input_shape: Literal["CHW", "HWC"] = "CHW",
     input_channels: Literal["RGB", "BGR"] = "RGB",
+    device: str = 'cpu',
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     image_like: (C, H, W) or (H, W, C) or path to image or bytes or file-like object
@@ -57,13 +58,13 @@ def detect(
 
     keypoints, descriptors = cv2.SIFT_create().detectAndCompute(image, None)
 
-    descriptors = torch.from_numpy(descriptors)
+    descriptors = torch.from_numpy(descriptors).to(device)
     kps = []
     for kp in keypoints:
         pt = kp.pt
         kps.append((pt[1], pt[0]))
 
-    keypoints = torch.tensor(kps)
+    keypoints = torch.tensor(kps).to(device)
 
     return keypoints, descriptors
 

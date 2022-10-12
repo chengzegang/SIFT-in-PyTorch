@@ -1,11 +1,20 @@
 ```python
-from sift import detect, visualize_keypoints, draw_match_lines, concat, ransac, listwise_match, ikp_qkp, draw_transfrom_points, sample_descriptors
+from torchsift import sift, utils, ransac
 from torchvision.transforms.functional import to_pil_image, pil_to_tensor
 import torchvision.transforms as T
 from PIL import Image
 import torch
 from tqdm.auto import tqdm
+torch.manual_seed(19971222)
+
 ```
+
+
+
+
+    <torch._C.Generator at 0x185377b24f0>
+
+
 
 
 ```python
@@ -22,13 +31,13 @@ index_image = resize(image)
 index_image = pil_to_tensor(index_image)
 query_image = transforms(image)
 
-idx_kps, idx_descs = detect(index_image)
-index_kps_image = visualize_keypoints(index_image, idx_kps.unsqueeze(0))
+idx_kps, idx_descs = sift.detect(index_image)
+index_kps_image = utils.visualize_keypoints(index_image, idx_kps.unsqueeze(0))
 
-query_kps, query_descs = detect(query_image)
-query_kps_image = visualize_keypoints(query_image, query_kps.unsqueeze(0))
+query_kps, query_descs = sift.detect(query_image)
+query_kps_image = utils.visualize_keypoints(query_image, query_kps.unsqueeze(0))
 
-side_by_side = concat(index_kps_image, query_kps_image, dim=1)
+side_by_side = utils.concat(index_kps_image, query_kps_image, dim=1)
 side_by_side
 ```
 
@@ -36,16 +45,16 @@ side_by_side
 
 
     
-![png](notebook_files/notebook_2_0.png)
+![png](README_files/README_2_0.png)
     
 
 
 
 
 ```python
-idx_idesc_qdesc = listwise_match(idx_descs.unsqueeze(0), query_descs.unsqueeze(0))
-idx_ikp, idx_qkp = ikp_qkp(idx_kps.unsqueeze(0), query_kps.unsqueeze(0), idx_idesc_qdesc)
-lines_without_ransac = draw_match_lines(index_image, query_image, idx_ikp.squeeze(0), idx_qkp.squeeze(0))
+idx_idesc_qdesc = sift.match(idx_descs.unsqueeze(0), query_descs.unsqueeze(0))
+idx_ikp, idx_qkp = sift.inflate(idx_kps.unsqueeze(0), query_kps.unsqueeze(0), idx_idesc_qdesc)
+lines_without_ransac = utils.draw_match_lines(index_image, query_image, idx_ikp.squeeze(0), idx_qkp.squeeze(0))
 lines_without_ransac
 ```
 
@@ -53,18 +62,18 @@ lines_without_ransac
 
 
     
-![png](notebook_files/notebook_3_0.png)
+![png](README_files/README_3_0.png)
     
 
 
 
 
 ```python
-H, selected_X, selected_Y = ransac(idx_ikp, idx_qkp)
-ransac_index_kps_image = visualize_keypoints(index_image, selected_X.unsqueeze(0))
-ransac_query_kps_image = visualize_keypoints(query_image, selected_Y.unsqueeze(0))
+H, selected_X, selected_Y, IX, IY = ransac.select(idx_ikp, idx_qkp)
+ransac_index_kps_image = utils.visualize_keypoints(index_image, selected_X.unsqueeze(0))
+ransac_query_kps_image = utils.visualize_keypoints(query_image, selected_Y.unsqueeze(0))
 
-ransac_kps_side_by_side = draw_transfrom_points(index_image, query_image, H, selected_X, selected_Y)
+ransac_kps_side_by_side = utils.draw_transfrom_points(index_image, query_image, H, selected_X, selected_Y)
 ransac_kps_side_by_side
 ```
 
@@ -72,14 +81,14 @@ ransac_kps_side_by_side
 
 
     
-![png](notebook_files/notebook_4_0.png)
+![png](README_files/README_4_0.png)
     
 
 
 
 
 ```python
-ransac_lines_side_by_size = draw_match_lines(index_image, query_image, selected_X, selected_Y)
+ransac_lines_side_by_size = utils.draw_match_lines(index_image, query_image, selected_X, selected_Y)
 ransac_lines_side_by_size
 ```
 
@@ -87,16 +96,16 @@ ransac_lines_side_by_size
 
 
     
-![png](notebook_files/notebook_5_0.png)
+![png](README_files/README_5_0.png)
     
 
 
 
 
 ```python
-outcome = concat(side_by_side, lines_without_ransac)
-outcome = concat(outcome, ransac_kps_side_by_side)
-outcome = concat(outcome, ransac_lines_side_by_size)
+outcome = utils.concat(side_by_side, lines_without_ransac)
+outcome = utils.concat(outcome, ransac_kps_side_by_side)
+outcome = utils.concat(outcome, ransac_lines_side_by_size)
 outcome
 ```
 
@@ -104,10 +113,15 @@ outcome
 
 
     
-![png](notebook_files/notebook_6_0.png)
+![png](README_files/README_6_0.png)
     
 
 
+
+
+```python
+import time
+```
 
 
 ```python
@@ -115,65 +129,109 @@ N = 10000
 index_images = torch.randint(0, 255, (N, 3, 64, 256), dtype=torch.uint8, device='cuda').cpu()
 query_images = torch.randint(0, 255, (N, 3, 64, 256), dtype=torch.uint8, device='cuda').cpu()
 
-chunk_size = 8
+chunk_size = 512
 n_chunks = N // chunk_size
 ```
 
 
 ```python
-skipped = 0
+# detect keypoints and descriptors
+start_time = time.time()
+idx_kps_descs = [sift.detect(i, device='cuda') for i in index_images]
+qry_kps_deescs = [sift.detect(q, device='cuda') for q in query_images]
+end_time = time.time()
+total = end_time - start_time
+avg_time = (end_time - start_time) * 1000 / N
+print(f'Total time of OpenCV SITF detecting on {N} images: {total}s')
+print(f'Average time of OpenCV SITF detecting per image: {avg_time}ms')
+```
+
+    Total time of OpenCV SITF detecting on 10000 images: 49.44602417945862s
+    Average time of OpenCV SITF detecting per image: 4.944602417945862ms
+    
+
+
+```python
+# sample keypoints and descriptors to have the same size
+start_time = time.time()
+idx_kps, idx_descs = list(zip(*idx_kps_descs))
+idx_kps, idx_descs = sift.sample(idx_kps, idx_descs)
+qry_kps, qry_descs = list(zip(*qry_kps_deescs))
+qry_kps, qry_descs = sift.sample(qry_kps, qry_descs)
+end_time = time.time() 
+total = end_time - start_time
+avg_time =  (end_time - start_time) * 1000 / N
+print(f'Total time of TorchSIFT sampling on {N} images: {total}s')
+print(f'Average time of TorchSIFT sampling per image: {avg_time}ms')
+```
+
+    Total time of TorchSIFT sampling on 10000 images: 5.820934295654297s
+    Average time of TorchSIFT sampling per image: 0.5820934295654296ms
+    
+
+
+```python
+# match keypoints and descriptors
+start_time = time.time()
 for i in (pbar := tqdm(range(n_chunks))):
-    index = index_images[i * chunk_size: (i + 1) * chunk_size]
-    query = query_images[i * chunk_size: (i + 1) * chunk_size]
+    idx_descs_chunk = idx_descs[i * chunk_size: (i + 1) * chunk_size]
+    idx_kps_chunk = idx_kps[i * chunk_size: (i + 1) * chunk_size]
+    qry_descs_chunk = qry_descs[i * chunk_size: (i + 1) * chunk_size]
+    qry_kps_chunk = qry_kps[i * chunk_size: (i + 1) * chunk_size]
+    idx_idesc_qdesc = sift.match(idx_descs_chunk, qry_descs_chunk)
+end_time = time.time()
+total = end_time - start_time
+avg_time =  (end_time - start_time) * 1000 / N
+print(f'Total time of TorchSIFT matching on {N} images: {total}s')
+print(f'Average time of TorchSIFT matching per image: {avg_time}ms')
     
-    idx_kps = []
-    idx_descs = []
-    query_kps = []
-    query_descs = []
-    
-    for j in range(chunk_size):
-        kps, descs = detect(index[j])
-        kps, descs = sample_descriptors(kps, descs)
-        idx_kps.append(kps)
-        idx_descs.append(descs)
-        
-        kps, descs = detect(query[j])
-        kps, descs = sample_descriptors(kps, descs)
-        query_kps.append(kps)
-        query_descs.append(descs)
-    
-    idx_kps = torch.stack(idx_kps)
-    idx_descs = torch.stack(idx_descs)
-    query_kps = torch.stack(query_kps)
-    query_descs = torch.stack(query_descs)
-    
-    idx_idesc_qdesc = listwise_match(idx_descs, query_descs)
-    if idx_idesc_qdesc.numel() == 0:
-        skipped += 1
-        continue
-    idx_ikp, idx_qkp = ikp_qkp(idx_kps, query_kps, idx_idesc_qdesc)
-    H, selected_X, selected_Y = ransac(idx_ikp, idx_qkp)
-    pbar.set_postfix({'skipped': skipped / (i + 1)})
 
 ```
 
 
-      1m 7.2s
+      0%|          | 0/19 [00:00<?, ?it/s]
 
+
+    Total time of TorchSIFT matching on 10000 images: 1.8055212497711182s
+    Average time of TorchSIFT matching per image: 0.18055212497711182ms
+    
 
 
 ```python
 N = 10000
-idx_kps = torch.randint(0, 255, (N, 256, 2), device='cuda').cpu()
-query_kps = torch.randint(0, 255, (N, 256, 2), device='cuda').cpu()
-idx_idesc_qdesc = torch.randint(0, 255, (N, 256, 256), device='cuda').cpu()
-chunk_size = 32
+idx_kps = torch.randint(0, 255, (N, 256, 2), device='cuda')
+query_kps = torch.randint(0, 255, (N, 256, 2), device='cuda')
+idx_idesc_qdesc = torch.randint(0, 255, (N, 256, 256), device='cuda')
+chunk_size = 512
 n_chunks = N // chunk_size
-for i in (pbar := tqdm(range(n_chunks))):
-    idx2query = idx_idesc_qdesc[i * chunk_size: (i + 1) * chunk_size]
-    idx_ikp, idx_qkp = ikp_qkp(idx_kps, query_kps, idx2query)
-    H, selected_X, selected_Y = ransac(idx_ikp, idx_qkp)
 ```
 
-      15.9s
 
+```python
+# ransac    
+start_time = time.time()
+for i in (pbar := tqdm(range(n_chunks))):
+    idx_ikp_chunk = idx_kps[i * chunk_size: (i + 1) * chunk_size]
+    idx_qkp_chunk = query_kps[i * chunk_size: (i + 1) * chunk_size]
+    idx_ikp_chunk, idx_qkp_chunk = sift.inflate(idx_ikp_chunk, idx_qkp_chunk, idx_idesc_qdesc)
+    H, selected_X, selected_Y, IX, IY = ransac.select(idx_ikp_chunk, idx_qkp_chunk)
+end_time = time.time()
+total = end_time - start_time
+avg_time =  (end_time - start_time) * 1000 / N
+print(f'Total time of TorchSIFT RANSAC on {N} images: {total}s')
+print(f'Average time of TorchSIFT RANSAC per image: {avg_time}ms')
+```
+
+
+      0%|          | 0/19 [00:00<?, ?it/s]
+
+
+    Total time of TorchSIFT RANSAC on 10000 images: 34.69129657745361s
+    Average time of TorchSIFT RANSAC per image: 3.4691296577453614ms
+    
+
+
+```python
+#%%capture
+#!jupyter nbconvert --execute --to markdown README.ipynb
+```

@@ -1,0 +1,30 @@
+[project]
+name = "TorchSIFT"
+version = "0.0a0.1"
+authors = [
+  { name="Zegang Cheng", email="zc2309@nyu.edu" },
+]
+description = "A Pytorch implementation of sift brute-force matcher and RANSAC"
+readme = "README.md"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/chengzegang/TorchSIFT"
+"Bug Tracker" = "https://github.com/chengzegang/TorchSIFT/issues"
+
+
+[build-system]
+requires = [
+    "torch>=1.12.1",                
+    "torchvision>=0.13.1",              
+    "numpy",                
+    "Pillow",                                             
+    "opencv-python",                                      
+    "setuptools"
+    ]
+build-backend = "setuptools.build_meta"
