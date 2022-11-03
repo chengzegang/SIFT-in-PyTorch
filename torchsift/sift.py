@@ -170,17 +170,14 @@ def match(
     idx_idesc_qdesc: (M, 3) M: number of matches, 3: (listwise index, index descriptor, query descriptor)
     """
     # normalize
-    sum_ = torch.sum(I)
-    sum_ += torch.sum(Q)
-    mean_ = sum_ / (torch.numel(I) + torch.numel(Q))
-    I = I / mean_
-    Q = Q / mean_
-
+    I = I / torch.linalg.matrix_norm(I, keepdim=True)
+    Q = Q / torch.linalg.matrix_norm(Q, keepdim=True)
     # compute distance matrix of each batch
     # since I is in shape (N, K, F)
     # and Q is in shape  (N, K, F),
     # the distance matrix is in shape (N, K, K)
     # where distance is caluated batchwise
+
     D = torch.cdist(I, Q)
 
     # find the top 2 smallest distances for each descriptor

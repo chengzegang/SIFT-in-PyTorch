@@ -48,8 +48,8 @@ def project(
 
     L = int(N * ratio[0])
     # build homogeneous coordinates
-    Xh = torch.cat([X, torch.ones(B, N, 1)], dim=-1)
-    Yh = torch.cat([Y, torch.ones(B, N, 1)], dim=-1)
+    Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
+    Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
 
     # build permutation matrix to simultaneously run different iterations
     P = torch.empty(it[0], L, dtype=torch.int64, device=X.device)
@@ -86,9 +86,9 @@ def project(
     I = torch.argmin(ER, dim=-1)
     # select the best projection matrix of each batch
     # Hb = [H[0, I[0]], H[1, I[1]], ..., H[B - 1, I[B - 1]]]
-    Hb = H[torch.arange(B), I]
+    Hb = H[torch.arange(B, device=X.device), I]
     # also select the best error associated with the best projection matrix
-    ERb = ER[torch.arange(B), I]
+    ERb = ER[torch.arange(B, device=X.device), I]
 
     return Hb, ERb
 
@@ -132,8 +132,8 @@ def select(
     # this Hb is in homogeneous coordinates
     Hb, _ = project(X, Y, it, ratio)
     # build homogeneous coordinates
-    Xh = torch.cat([X, torch.ones(B, N, 1)], dim=-1)
-    Yh = torch.cat([Y, torch.ones(B, N, 1)], dim=-1)
+    Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
+    Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
 
     ############################################################
     # Xh has shape      (B, N    , D + 1)
@@ -192,8 +192,8 @@ def count(
     # get the best projection matrix for each batch
     Hb, _ = project(X, Y, it, ratio)
     # build homogeneous coordinates
-    Xh = torch.cat([X, torch.ones(B, N, 1)], dim=-1)
-    Yh = torch.cat([Y, torch.ones(B, N, 1)], dim=-1)
+    Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
+    Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
     ############################################################
     # Xh has shape      (B, N    , D + 1)
     # and Hb has shape (B, D + 1, D + 1)
@@ -210,3 +210,52 @@ def count(
     # sum the number of inliers for each batch
     # for each pair of X[i] and Y[i], MATCH[i] is the number of inliers
     return torch.sum(I, dim=-1)
+
+
+
+
+@torch.jit.script
+def error(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    it: torch.Tensor = torch.tensor([32]),
+    ratio: torch.Tensor = torch.tensor([0.6]),
+) -> torch.Tensor:
+    """
+    parametres:
+        X: (*B, N, D), B is auxiliary batch dimensions, N is the sample size, D is the feature dimension
+        Y: (*B, M, D), M is the sample size, D is the feature dimension
+        it: int, the number of iterations
+        ratio: float, the sampling ratio for each iteration
+
+    return:
+        ER (B,): the error matrix
+
+    implementation details:
+
+        variables:
+
+            B (int): the auxiliary batch dimensions
+            N (int): the sample size
+            D (int): the feature dimension
+            DIFF (B, N, D): the difference between X and Y
+            ER (B, N): the error matrix
+            T (B,): The threshold matrix
+            I (B,): The index matrix for inliers
+    """
+    B, N, D = X.shape
+    # get the best projection matrix for each batch
+    Hb, _ = project(X, Y, it, ratio)
+    # build homogeneous coordinates
+    Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
+    Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
+    ############################################################
+    # Xh has shape      (B, N    , D + 1)
+    # and Hb has shape (B, D + 1, D + 1)
+    # result =>        (B, N    , D + 1) (the result of last two dimensions is (N, D + 1) and the batch dimension is broadcasted)
+    ############################################################
+    DIFF = Xh @ Hb - Yh
+    # calculate the total error for each sample
+    ER = torch.norm(DIFF, dim=-1)
+    ER = torch.mean(ER, dim=-1)
+    return ER
