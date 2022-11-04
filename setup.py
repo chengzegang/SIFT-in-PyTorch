@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 setup(
     name="torchsift",
-    version="0.1a1",
+    version="0.1.0",
     description="A Pytorch implementation of sift brute-force matcher and RANSAC",
     author="Zegang Cheng",
     author_email="zc2309@nyu.edu",
