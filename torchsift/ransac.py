@@ -1,14 +1,15 @@
 from typing import Tuple
+
 import torch
-import math
+from torch import jit
 
 
-@torch.jit.script
+@jit.script
 def project(
     X: torch.Tensor,
     Y: torch.Tensor,
-    it: torch.Tensor = torch.tensor([32]),
-    ratio: torch.Tensor = torch.tensor([0.6]),
+    it: int = 32,
+    ratio: float = 0.6,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     parametres:
@@ -46,14 +47,14 @@ def project(
 
     B, N, D = X.shape
 
-    L = int(N * ratio[0])
+    L = int(N * ratio)
     # build homogeneous coordinates
     Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
     Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
 
     # build permutation matrix to simultaneously run different iterations
-    P = torch.empty(it[0], L, dtype=torch.int64, device=X.device)
-    for i in torch.arange(it[0]):
+    P = torch.empty(it, L, dtype=torch.int64, device=X.device)
+    for i in torch.arange(it):
         P[i] = torch.randperm(N)[:L]
 
     # select Xs and Ys from Xh and Yh using permutation matrix P
@@ -83,22 +84,22 @@ def project(
     # calculate the total error for each iteration
     ER = torch.norm(DIFF, dim=(-1, -2))
     # find the best iteration of each batch
-    I = torch.argmin(ER, dim=-1)
+    inliner = torch.argmin(ER, dim=-1)
     # select the best projection matrix of each batch
     # Hb = [H[0, I[0]], H[1, I[1]], ..., H[B - 1, I[B - 1]]]
-    Hb = H[torch.arange(B, device=X.device), I]
+    Hb = H[torch.arange(B, device=X.device), inliner]
     # also select the best error associated with the best projection matrix
-    ERb = ER[torch.arange(B, device=X.device), I]
+    ERb = ER[torch.arange(B, device=X.device), inliner]
 
     return Hb, ERb
 
 
-@torch.jit.script
+@jit.script
 def select(
     X: torch.Tensor,
     Y: torch.Tensor,
-    it: torch.Tensor = torch.tensor([32]),
-    ratio: torch.Tensor = torch.tensor([0.6]),
+    it: int = 32,
+    ratio: float = 0.6,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     parametres:
@@ -148,23 +149,23 @@ def select(
     # since mean is greatly influenced by outliers and will shift to them,
     # we can automatically cover most of the inliers by utilizing this feature
     T = torch.mean(ER, dim=-1, keepdim=True)
-    I = ER < T
+    inliner = ER < T
     # select the inliers of X and Y
-    Xi = X[I]
-    Yi = Y[I]
+    Xi = X[inliner]
+    Yi = Y[inliner]
     # select the index of inliers of X and Y
-    IX = torch.nonzero(I)
-    IY = torch.nonzero(I)
+    IX = torch.nonzero(inliner)
+    IY = torch.nonzero(inliner)
 
     return Hb, Xi, Yi, IX, IY
 
 
-@torch.jit.script
+@jit.script
 def count(
     X: torch.Tensor,
     Y: torch.Tensor,
-    it: torch.Tensor = torch.tensor([32]),
-    ratio: torch.Tensor = torch.tensor([0.6]),
+    it: int = 32,
+    ratio: float = 0.6,
 ) -> torch.Tensor:
     """
     parametres:
@@ -206,20 +207,18 @@ def count(
     # since mean is greatly influenced by outliers and will shift to them,
     # we can automatically cover most of the inliers by utilizing this feature
     T = torch.mean(ER, dim=-1, keepdim=True)
-    I = ER < T
+    inliner = ER < T
     # sum the number of inliers for each batch
     # for each pair of X[i] and Y[i], MATCH[i] is the number of inliers
-    return torch.sum(I, dim=-1)
+    return torch.sum(inliner, dim=-1)
 
 
-
-
-@torch.jit.script
+@jit.script
 def error(
     X: torch.Tensor,
     Y: torch.Tensor,
-    it: torch.Tensor = torch.tensor([32]),
-    ratio: torch.Tensor = torch.tensor([0.6]),
+    it: int = 32,
+    ratio: float = 0.6,
 ) -> torch.Tensor:
     """
     parametres:
@@ -256,6 +255,6 @@ def error(
     ############################################################
     DIFF = Xh @ Hb - Yh
     # calculate the total error for each sample
-    ER = torch.norm(DIFF, dim=-1)
+    ER: torch.Tensor = torch.linalg.vector_norm(DIFF, dim=-1)
     ER = torch.mean(ER, dim=-1)
     return ER

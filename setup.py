@@ -8,15 +8,14 @@ setup(
     author_email="zc2309@nyu.edu",
     url="https://github.com/chengzegang/TorchSIFT",
     license="MIT",
-    packages=find_packages(),               
-    python_requires=">=3.8",                
-    install_requires=[              
-        "torch>=1.12.1",                
-        "torchvision>=0.13.1",              
-        "numpy",                
-        "Pillow",                                             
-        "opencv-python",                                      
-        "setuptools",               
-        
+    packages=find_packages(),
+    python_requires=">=3.8",
+    install_requires=[
+        "torch>=1.12.1",
+        "torchvision>=0.13.1",
+        "numpy",
+        "Pillow",
+        "opencv-python",
+        "setuptools",
     ],
 )

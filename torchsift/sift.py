@@ -1,11 +1,14 @@
 from __future__ import annotations
-from pathlib import Path
-from typing import BinaryIO, List, Literal, Tuple
-import torch
-import cv2
-import numpy as np
+
 import io
 import logging
+from pathlib import Path
+from typing import BinaryIO, List, Tuple
+
+import cv2
+import numpy as np
+import torch
+from torch import jit
 
 pil_logger = logging.getLogger("PIL")
 pil_logger.setLevel(logging.INFO)
@@ -18,9 +21,8 @@ def get_keypoints_descriptors(data: str | torch.Tensor):
 
 def detect(
     image_like: torch.Tensor | np.ndarray | str | Path | bytes | BinaryIO,
-    input_shape: Literal["CHW", "HWC"] = "CHW",
-    input_channels: Literal["RGB", "BGR"] = "RGB",
-    device: str = 'cpu',
+    input_shape: str = "CHW",
+    input_channels: str = "RGB",
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     image_like: (C, H, W) or (H, W, C) or path to image or bytes or file-like object
@@ -31,76 +33,58 @@ def detect(
     keypoints: (N, 2) N: number of keypoints, 2: (x, y) coordinates
     descriptors: (N, 128) N: number of keypoints, 128: descriptor
     """
-
-    image = None
+    input_shape = input_shape.upper()
+    input_channels = input_channels.upper()
+    # shapes: Any to (HWC)
     if isinstance(image_like, torch.Tensor):
-        if input_shape == "CHW":
-            image_like = image_like.transpose(0, 2)
-        image = image_like.numpy()
-    if isinstance(image_like, np.ndarray):
-        if input_shape == "CHW":
-            image_like = image_like.transpose(0, 2)
-        image = image_like
+        image_like = image_like.numpy()
+
     if isinstance(image_like, (str, Path)):
-        image = cv2.imread(image_like, cv2.IMREAD_COLOR)
+        image_like = cv2.imread(str(image_like), cv2.IMREAD_COLOR)
+        input_shape = "HWC"
         input_channels = "BGR"
     if isinstance(image_like, bytes):
         buff = io.BytesIO(image_like)
-        image = cv2.imdecode(buff, cv2.IMREAD_COLOR)
+        image_like = cv2.imdecode(buff, cv2.IMREAD_COLOR)
+        input_shape = "HWC"
+        input_channels = "BGR"
     if isinstance(image_like, BinaryIO):
-        image = cv2.imdecode(image_like, cv2.IMREAD_COLOR)
+        image_like = cv2.imdecode(image_like, cv2.IMREAD_COLOR)
+        input_shape = "HWC"
+        input_channels = "BGR"
 
-    image = (
-        cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
-        if input_channels == "RGB"
-        else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    )
+    assert isinstance(image_like, np.ndarray), "image_like must be a numpy array"
+    if input_shape == "CHW":
+        image_like = np.swapaxes(image_like, 0, 2)  # (C, H, W) -> (W, H, C)
+        image_like = np.swapaxes(image_like, 0, 1)  # (W, H, C) -> (H, W, C)
 
-    keypoints, descriptors = cv2.SIFT_create().detectAndCompute(image, None)
+    if input_shape == "CWH":
+        image_like = np.swapaxes(image_like, 0, 2)  # (C, W, H) -> (W, H, C)
+        image_like = np.swapaxes(image_like, 0, 1)  # (W, H, C) -> (H, W, C)
 
-    descriptors = torch.from_numpy(descriptors).to(device)
+    if input_shape == "WHC":
+        image_like = image_like.swapaxes(0, 1)  # (W, H, C) -> (H, W, C)
+
+    image_like = image_like.astype(np.uint8)
+    if input_channels == "RGB":
+        image_like = cv2.cvtColor(image_like, cv2.COLOR_RGB2BGR)
+
+    image_like = cv2.cvtColor(image_like, cv2.COLOR_BGR2GRAY)
+    keypoints, descriptors = cv2.SIFT_create().detectAndCompute(image_like, None)
+
+    descriptors = torch.from_numpy(descriptors)
     kps = []
     for kp in keypoints:
         pt = kp.pt
         kps.append((pt[1], pt[0]))
 
-    keypoints = torch.tensor(kps).to(device)
-
+    keypoints = torch.tensor(kps)
+    if input_shape == "CHW":
+        keypoints = keypoints.flip(1)
     return keypoints, descriptors
 
 
-@torch.jit.script
-def topk_with_chunk(
-    X: torch.Tensor,
-    k: torch.Tensor,
-    largest: torch.Tensor = torch.Tensor([1]),
-    chunk_size: torch.Tensor = torch.tensor([512]),
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    X: (N, D) N: number of elements, D: dimension
-    k: (1) number of elements to select
-    largest: (1) 1: largest, 0: smallest
-    chunk_size: (1) number of elements to process at a time
-
-    returns:
-    D: (k, D) k: number of elements to select, D: dimension
-    I: (k) k: number of elements to select
-    """
-    N = X.size(0)
-    CHK = X.split(chunk_size[0])
-    D = torch.empty(N, device=X.device)
-    I = torch.empty(N, device=X.device)
-    size = 0
-    for chk in CHK:
-        chk_D, chk_I = torch.topk(chk, k[0], dim=-1, largest=bool(largest))
-        chk_I = chk_I + size
-        D[chk_I] = chk_D
-        size += chk.size(0)
-
-    return D, I
-
-
-@torch.jit.script
+@jit.script
 def sample(
     kpts_list: List[torch.Tensor], dtrs_list: List[torch.Tensor], size: int = 384
 ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -122,45 +106,54 @@ def sample(
     DT = torch.empty((N, size, DF), device=dtrs_list[0].device)
 
     for idx in range(N):
-
         kpts = kpts_list[idx]
         dtrs = dtrs_list[idx]
         n_kpts = len(kpts)
 
         if len(kpts) > size:
-
             # uniform sampling to reduce number of keypoints to desired size
-            I = torch.randperm(n_kpts)[:size]
-            sampled_kpts = kpts[I]
+            index = torch.randperm(n_kpts)[:size]
+            sampled_kpts = kpts[index]
             KP[idx] = sampled_kpts
-            sampled_dtrs = dtrs[I]
+            sampled_dtrs = dtrs[index]
             DT[idx] = sampled_dtrs
 
         else:
-
             KP[idx, :n_kpts] = kpts
             DT[idx, :n_kpts] = dtrs
 
             # uniform sampling to fill up to desired size
             diff = size - len(kpts)
-            I = torch.arange(n_kpts)
+            index = torch.arange(n_kpts)
 
             times = diff // len(kpts)
-            I = I.repeat(times + 1)
+            index = index.repeat(times + 1)
 
-            I = I[torch.randperm(len(I))][:diff]
+            index = index[torch.randperm(len(index))][:diff]
 
-            sampled_kpts = kpts[I]
+            sampled_kpts = kpts[index]
             KP[idx, n_kpts:] = sampled_kpts
-            sampled_dtrs = dtrs[I]
+            sampled_dtrs = dtrs[index]
             DT[idx, n_kpts:] = sampled_dtrs
 
     return KP, DT
 
 
-@torch.jit.script
+@jit.script
+def _min_max_norm(
+    index: torch.Tensor, query: torch.Tensor
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    min_val = torch.min(torch.min(index), torch.min(query))
+    max_val = torch.max(torch.max(index), torch.max(query))
+
+    index = (index - min_val) / (max_val - min_val + 1e-12)
+    query = (query - min_val) / (max_val - min_val + 1e-12)
+    return index, query
+
+
+@jit.script
 def match(
-    I: torch.Tensor, Q: torch.Tensor, thr: float = 0.7, full_rank_thr: int = 8
+    index: torch.Tensor, query: torch.Tensor, thr: float = 0.7, full_rank_thr: int = 8
 ) -> torch.Tensor:
     """
     index: (N, K, F) N: number of images, K: number of descriptors, F: descriptor dimension
@@ -170,15 +163,16 @@ def match(
     idx_idesc_qdesc: (M, 3) M: number of matches, 3: (listwise index, index descriptor, query descriptor)
     """
     # normalize
-    I = I / torch.linalg.matrix_norm(I, keepdim=True)
-    Q = Q / torch.linalg.matrix_norm(Q, keepdim=True)
+    index = index.double()
+    query = query.double()
+    index, query = _min_max_norm(index, query)
     # compute distance matrix of each batch
     # since I is in shape (N, K, F)
     # and Q is in shape  (N, K, F),
     # the distance matrix is in shape (N, K, K)
     # where distance is caluated batchwise
 
-    D = torch.cdist(I, Q)
+    D = torch.cdist(index.double(), query.double())
 
     # find the top 2 smallest distances for each descriptor
     TD, TI = torch.topk(D, 2, dim=-1, largest=False)
@@ -186,7 +180,7 @@ def match(
 
     # ratio test to find matches
     # M is in shape (N, K)
-    M = TD[..., 0] < thr * TD[..., 1]
+    M = TD[..., 0] <= thr * TD[..., 1]
 
     # compute the number of matches for each batch
     # NM is in shape (N, )
@@ -211,7 +205,7 @@ def match(
     return IDX
 
 
-@torch.jit.script
+@jit.script
 def inflate(
     IKP: torch.Tensor, QKP: torch.Tensor, IDX: torch.Tensor
 ) -> Tuple[torch.Tensor, torch.Tensor]:
