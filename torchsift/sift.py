@@ -80,7 +80,7 @@ def detect(
 
     keypoints = torch.tensor(kps)
     if input_shape == "CHW":
-        keypoints = keypoints.flip(1)
+        keypoints = keypoints.flip(-1)
     return keypoints, descriptors
 
 
@@ -110,31 +110,16 @@ def sample(
         dtrs = dtrs_list[idx]
         n_kpts = len(kpts)
 
-        if len(kpts) > size:
-            # uniform sampling to reduce number of keypoints to desired size
-            index = torch.randperm(n_kpts)[:size]
-            sampled_kpts = kpts[index]
-            KP[idx] = sampled_kpts
-            sampled_dtrs = dtrs[index]
-            DT[idx] = sampled_dtrs
+        index = (
+            torch.randperm(size) % n_kpts
+            if size > n_kpts
+            else torch.randperm(n_kpts)[:size]
+        )
 
-        else:
-            KP[idx, :n_kpts] = kpts
-            DT[idx, :n_kpts] = dtrs
-
-            # uniform sampling to fill up to desired size
-            diff = size - len(kpts)
-            index = torch.arange(n_kpts)
-
-            times = diff // len(kpts)
-            index = index.repeat(times + 1)
-
-            index = index[torch.randperm(len(index))][:diff]
-
-            sampled_kpts = kpts[index]
-            KP[idx, n_kpts:] = sampled_kpts
-            sampled_dtrs = dtrs[index]
-            DT[idx, n_kpts:] = sampled_dtrs
+        sampled_kpts = kpts[index]
+        KP[idx, n_kpts:] = sampled_kpts
+        sampled_dtrs = dtrs[index]
+        DT[idx, n_kpts:] = sampled_dtrs
 
     return KP, DT
 
