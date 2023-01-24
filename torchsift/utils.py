@@ -30,15 +30,15 @@ def draw_match_lines(image1, image2, kps1, kps2):
     return image
 
 
-def draw_transfrom_points(index_image, query_image, H, selected_X, selected_Y):
+def draw_transfrom_points(index_image, query_image, H, selected_X, selected_Y,):
 
     padded_X = torch.cat(
         [selected_X, torch.ones(selected_X.shape[0], 1, device=selected_X.device)],
-        dim=1,
+        dim=-1,
     )
 
-    projected_X = torch.matmul(padded_X, H)
-    projected_X = projected_X[:, ..., :2] / projected_X[:, ..., 2:]
+    projected_X = torch.matmul(padded_X, H.transpose(-1, -2))
+    projected_X = projected_X[..., :2] / projected_X[..., 2:]
 
     index_image = visualize_keypoints(index_image, selected_X.unsqueeze(0))
     query_image = visualize_keypoints(query_image, selected_Y.unsqueeze(0))

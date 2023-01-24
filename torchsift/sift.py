@@ -116,10 +116,8 @@ def sample(
             else torch.randperm(n_kpts)[:size]
         )
 
-        sampled_kpts = kpts[index]
-        KP[idx, n_kpts:] = sampled_kpts
-        sampled_dtrs = dtrs[index]
-        DT[idx, n_kpts:] = sampled_dtrs
+        KP[idx] = kpts[index]
+        DT[idx] = dtrs[index]
 
     return KP, DT
 

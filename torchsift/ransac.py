@@ -4,7 +4,7 @@ import torch
 from torch import jit
 
 
-@jit.script
+@torch.jit.script
 def project(
     X: torch.Tensor,
     Y: torch.Tensor,
@@ -53,17 +53,31 @@ def project(
     Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
 
     # build permutation matrix to simultaneously run different iterations
-    P = torch.empty(it, L, dtype=torch.int64, device=X.device)
-    for i in torch.arange(it):
-        P[i] = torch.randperm(N)[:L]
+    P = torch.empty(int(it), L, dtype=torch.int64, device=X.device)
+    for i in torch.arange(int(it)):
+        P[i] = torch.randperm(N, device=P.device)[:L]
 
     # select Xs and Ys from Xh and Yh using permutation matrix P
     Xs = Xh[:, P]
     Ys = Yh[:, P]
+    B = Xs.shape[0]
+    IT = Xs.shape[1]
+    N = Xs.shape[2]
+    D = Xs.shape[3]
+    M = torch.zeros(B, IT, N * 2, 9, device=Xs.device)
+    M[:, :, 0::2, :D] = Xs
+    M[:, :, 1::2, D : 2 * D] = Xs
+    M[:, :, 0::2, 2 * D :] = -Xs * Ys[..., 0].unsqueeze(-1)
+    M[:, :, 1::2, 2 * D :] = -Xs * Ys[..., 1].unsqueeze(-1)
 
+    _, _, V = torch.linalg.svd(M)
+    P = V.transpose(-1, -2)[..., -1]
+    P = P / P[..., -1].unsqueeze(-1)
+    H = P.reshape(B, IT, 3, 3)
     # lsqrt to find the projection matrix using sampled Xh and Yh
-    H = torch.linalg.lstsq(Xs, Ys).solution
-
+    # zero_vec = torch.zeros(1, 1, M.shape[-2], 1, device=M.device)
+    # p = torch.linalg.lstsq(M, zero_vec).solution
+    # H = p.reshape(B, IT, D, D)
     # evaluate the transformation error on the entire Xh and Yh
 
     #       explain for batch matrix multiplication:
@@ -80,16 +94,18 @@ def project(
     # REMINDER: batch matrix multiplication always compare last 2 dimensions first.
     ############################################################
 
-    DIFF = Xh.unsqueeze(1) @ H - Yh.unsqueeze(1)
+    projected = Xh.unsqueeze(1) @ H.transpose(-1, -2)
+    projected / projected[..., -1:]
+    DIFF = projected - Yh.unsqueeze(1)
     # calculate the total error for each iteration
     ER = torch.norm(DIFF, dim=(-1, -2))
     # find the best iteration of each batch
-    inliner = torch.argmin(ER, dim=-1)
+    index = torch.argmin(ER, dim=-1)
     # select the best projection matrix of each batch
     # Hb = [H[0, I[0]], H[1, I[1]], ..., H[B - 1, I[B - 1]]]
-    Hb = H[torch.arange(B, device=X.device), inliner]
+    Hb = H[torch.arange(B, device=X.device), index]
     # also select the best error associated with the best projection matrix
-    ERb = ER[torch.arange(B, device=X.device), inliner]
+    ERb = ER[torch.arange(B, device=X.device), index]
 
     return Hb, ERb
 
@@ -148,7 +164,7 @@ def select(
     # use the mean error of each batch as the threshold
     # since mean is greatly influenced by outliers and will shift to them,
     # we can automatically cover most of the inliers by utilizing this feature
-    T = torch.mean(ER, dim=-1, keepdim=True)
+    T = torch.nanquantile(ER, 0.7, dim=-1, keepdim=True)
     inliner = ER < T
     # select the inliers of X and Y
     Xi = X[inliner]
@@ -203,11 +219,8 @@ def count(
     DIFF = Xh @ Hb - Yh
     # calculate the total error for each sample
     ER = torch.norm(DIFF, dim=-1)
-    # use the mean error of each batch as the threshold
-    # since mean is greatly influenced by outliers and will shift to them,
-    # we can automatically cover most of the inliers by utilizing this feature
-    T = torch.mean(ER, dim=-1, keepdim=True)
-    inliner = ER < T
+    T = torch.nanquantile(ER, 0.7, dim=-1, keepdim=True)
+    inliner = ER <= T
     # sum the number of inliers for each batch
     # for each pair of X[i] and Y[i], MATCH[i] is the number of inliers
     return torch.sum(inliner, dim=-1)
