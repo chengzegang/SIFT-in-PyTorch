@@ -1,8 +1,9 @@
 from typing import List
-from torchvision.transforms.functional import pil_to_tensor, to_pil_image
-from torchvision.utils import draw_keypoints
+
 import torch
 from PIL import Image
+from torchvision.transforms.functional import pil_to_tensor, to_pil_image
+from torchvision.utils import draw_keypoints
 
 
 def visualize_keypoints(image, keypoints, color="red", radius=2):
@@ -30,7 +31,13 @@ def draw_match_lines(image1, image2, kps1, kps2):
     return image
 
 
-def draw_transfrom_points(index_image, query_image, H, selected_X, selected_Y,):
+def draw_transfrom_points(
+    index_image,
+    query_image,
+    H,
+    selected_X,
+    selected_Y,
+):
 
     padded_X = torch.cat(
         [selected_X, torch.ones(selected_X.shape[0], 1, device=selected_X.device)],

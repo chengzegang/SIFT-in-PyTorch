@@ -1,11 +1,102 @@
-from typing import Tuple
+from functools import wraps
+from typing import Literal, Tuple
 
 import torch
 from torch import jit
 
+# My personal experience:
+# solving perspective transform does not provide better results,
+# but has major performance drawback (when assigning the M matrix)
 
-@torch.jit.script
-def project(
+
+@jit.script
+def _project_linear_lstsq(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    it: int = 32,
+    ratio: float = 0.6,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    parametres:
+        X: (*B, N, D), B is auxiliary batch dimensions, N is the sample size, D is the feature dimension
+        Y: (*B, M, D), M is the sample size, D is the feature dimension
+        it: int, the number of iterations
+        ratio: float, the sampling ratio for each iteration
+    return:
+        Hb: (*B, D + 1, D + 1), the projection matrix,
+        ERb: (*B, ), the error matrix
+    implementation details:
+        variables:
+            B (int): the auxiliary batch dimensions
+            N (int): the sample size
+            D (int): the feature dimension
+            L (int): the number of samples for each iteration
+            Xh (B, N, D + 1): X in homogeneous coordinates
+            Yh (B, N, D + 1): Y in homogeneous coordinates
+            P (it, L): permutation matrix
+            Xs (B, it, L, D + 1): the sampled X
+            Ys (B, it, L, D + 1): the sampled Y
+            H (B, it, D + 1, D + 1): the projection tensor where every H[b, i] is a projection matrix
+            ER (B, it): the error matrix
+            I(B): the index matrix
+            Hr (B, D + 1, D + 1): the projection matrix of the best iteration of each batch
+            ERr (B, ): the error matrix of the best iteration of each batch
+    """
+    # reshape X and Y to (*B, N, D) and (*B, M, D)
+    X = X.view(-1, X.shape[-2], X.shape[-1])
+    Y = Y.view(-1, Y.shape[-2], Y.shape[-1])
+
+    B, N, D = X.shape
+
+    L = int(N * ratio)
+    # build homogeneous coordinates
+    Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
+    Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
+
+    # build permutation matrix to simultaneously run different iterations
+    P = torch.empty(it, L, dtype=torch.int64, device=X.device)
+    for i in torch.arange(it):
+        P[i] = torch.randperm(N)[:L]
+
+    # select Xs and Ys from Xh and Yh using permutation matrix P
+    Xs = Xh[:, P]
+    Ys = Yh[:, P]
+
+    # lsqrt to find the projection matrix using sampled Xh and Yh
+    H = torch.linalg.lstsq(Xs, Ys).solution
+
+    # evaluate the transformation error on the entire Xh and Yh
+
+    #       explain for batch matrix multiplication:
+    ############################################################
+    # Xh has shape (B, N, D + 1) and H has shape (B, it, D + 1, D + 1)
+    # we unsqueeze Xh to (B, 1, N, D + 1) so the broadcasting mechanism
+    # will be equivalent to expand Xh into (B, it, N, D + 1)
+    # where the original last 2 dimensions are view-copied along the 1 valued dimension (second dimension)
+    # internally, this is equivalent to the following code:
+    # Xh = Xh.unsqueeze(1).expand(B, it, N, D + 1).contiguous().view(B * it, N, D + 1)
+    # H = H.contiguous().view(B * B, D + 1, D + 1)
+    # res = torch.mm(Xh, H)
+    # res = res.view(B, it, N, D + 1)
+    # REMINDER: batch matrix multiplication always compare last 2 dimensions first.
+    ############################################################
+
+    DIFF = Xh.unsqueeze(1) @ H - Yh.unsqueeze(1)
+    # calculate the total error for each iteration
+    ER = torch.norm(DIFF, dim=(-1, -2))
+    # find the best iteration of each batch
+    inliner = torch.argmin(ER, dim=-1)
+    # select the best projection matrix of each batch
+    # Hb = [H[0, I[0]], H[1, I[1]], ..., H[B - 1, I[B - 1]]]
+    Hb = H[torch.arange(B, device=X.device), inliner]
+    # also select the best error associated with the best projection matrix
+    ERb = ER[torch.arange(B, device=X.device), inliner]
+
+    return Hb, ERb
+
+
+@jit.script
+def _project_pespective_transform(
     X: torch.Tensor,
     Y: torch.Tensor,
     it: int = 32,
@@ -74,11 +165,6 @@ def project(
     P = V.transpose(-1, -2)[..., -1]
     P = P / P[..., -1].unsqueeze(-1)
     H = P.reshape(B, IT, 3, 3)
-    # lsqrt to find the projection matrix using sampled Xh and Yh
-    # zero_vec = torch.zeros(1, 1, M.shape[-2], 1, device=M.device)
-    # p = torch.linalg.lstsq(M, zero_vec).solution
-    # H = p.reshape(B, IT, D, D)
-    # evaluate the transformation error on the entire Xh and Yh
 
     #       explain for batch matrix multiplication:
     ############################################################
@@ -110,12 +196,37 @@ def project(
     return Hb, ERb
 
 
+@torch.jit.script
+def project(
+    X: torch.Tensor,
+    Y: torch.Tensor,
+    it: int = 32,
+    ratio: float = 0.6,
+    model: str = "linear",
+) -> Tuple[torch.Tensor, torch.Tensor]:
+
+    if model == "linear":
+        linear_res: Tuple[torch.Tensor, torch.Tensor] = _project_linear_lstsq(
+            X, Y, it, ratio
+        )
+        return linear_res
+    elif model == "perspective":
+        pers_res: Tuple[torch.Tensor, torch.Tensor] = _project_pespective_transform(
+            X, Y, it, ratio
+        )
+        return pers_res
+    else:
+        raise ValueError(f"Unknown model {model}")
+
+
 @jit.script
 def select(
     X: torch.Tensor,
     Y: torch.Tensor,
     it: int = 32,
     ratio: float = 0.6,
+    outlier_thr: float = 0.7,
+    model: str = "linear",
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     parametres:
@@ -147,7 +258,7 @@ def select(
 
     # get the best projection matrix for each batch
     # this Hb is in homogeneous coordinates
-    Hb, _ = project(X, Y, it, ratio)
+    Hb, _ = project(X, Y, it, ratio, model)
     # build homogeneous coordinates
     Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
     Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
@@ -164,7 +275,7 @@ def select(
     # use the mean error of each batch as the threshold
     # since mean is greatly influenced by outliers and will shift to them,
     # we can automatically cover most of the inliers by utilizing this feature
-    T = torch.nanquantile(ER, 0.7, dim=-1, keepdim=True)
+    T = torch.nanquantile(ER, outlier_thr, dim=-1, keepdim=True)
     inliner = ER < T
     # select the inliers of X and Y
     Xi = X[inliner]
@@ -182,6 +293,8 @@ def count(
     Y: torch.Tensor,
     it: int = 32,
     ratio: float = 0.6,
+    outlier_thr: float = 0.7,
+    model: str = "linear",
 ) -> torch.Tensor:
     """
     parametres:
@@ -219,7 +332,7 @@ def count(
     DIFF = Xh @ Hb - Yh
     # calculate the total error for each sample
     ER = torch.norm(DIFF, dim=-1)
-    T = torch.nanquantile(ER, 0.7, dim=-1, keepdim=True)
+    T = torch.nanquantile(ER, outlier_thr, dim=-1, keepdim=True)
     inliner = ER <= T
     # sum the number of inliers for each batch
     # for each pair of X[i] and Y[i], MATCH[i] is the number of inliers
@@ -232,6 +345,7 @@ def error(
     Y: torch.Tensor,
     it: int = 32,
     ratio: float = 0.6,
+    model: str = "linear",
 ) -> torch.Tensor:
     """
     parametres:
@@ -257,7 +371,7 @@ def error(
     """
     B, N, D = X.shape
     # get the best projection matrix for each batch
-    Hb, _ = project(X, Y, it, ratio)
+    Hb, _ = project(X, Y, it, ratio, model)
     # build homogeneous coordinates
     Xh = torch.cat([X, torch.ones(B, N, 1, device=X.device)], dim=-1)
     Yh = torch.cat([Y, torch.ones(B, N, 1, device=Y.device)], dim=-1)
