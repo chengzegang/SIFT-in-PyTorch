@@ -98,3 +98,21 @@ packages = ["src"]
 
 [tool.hatch.version]
 path = "src/torchsift/__about__.py"
+
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+allow_redefinition = true
+[[tool.mypy.overrides]]
+module = [
+    "torch.*",
+    "torchvision.*",
+    "pykeops.*",
+    "scipy.*",
+    "matplotlib.*",
+    "ot.*",
+    "kornia.*",
+]
+ignore_missing_imports = true
