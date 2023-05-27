@@ -1,5 +1,5 @@
-from torchsift import sift
-from torchsift.ransac.matcher import match
+from src.torchsift import sift
+from src.torchsift.ransac.matcher import match
 import torch
 
 x = torch.randn(2, 3, 128, 256).float()
