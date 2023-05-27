@@ -6,7 +6,7 @@ x = torch.randn(2, 3, 128, 256).float()
 y = torch.randn(2, 3, 128, 256).float()
 
 
-sift = sift.SIFT(512)
-xk, xd = sift(x)
-yk, yd = sift(y)
+model = sift.SIFT(512)
+xk, xd = model(x)
+yk, yd = model(y)
 fs, inliners, errs = match(xk, xd, yk, yd)
