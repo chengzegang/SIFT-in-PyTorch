@@ -13,7 +13,7 @@ from kornia.feature import (
     get_laf_center,
 )
 import torchvision.transforms.functional as TF  # type: ignore
-from PIL import Image
+from PIL import Image # type: ignore
 from kornia.geometry import ConvQuadInterp3d, ScalePyramid
 from torch.nn import Module
 import torch.nn.functional as F
@@ -61,7 +61,7 @@ class SIFT(Module):
 
     def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         B, C, H, W = x.shape
-        x = rgb_to_grayscale(x).float()
+        x = rgb_to_grayscale(x.float() / 255)
         lafs, resps = self.detect(x)
         descs = self.describe(x, lafs)
         kpts = get_laf_center(lafs)
