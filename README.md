@@ -27,7 +27,7 @@ transforms = T.Compose(
 
 
 ```python
-from tensordict import tensorclass, MemmapTensor
+from tensordict import tensorclass, MemoryMappedTensor
 @tensorclass
 class KeyPoints:
     pts: torch.Tensor
@@ -35,8 +35,8 @@ class KeyPoints:
 
     @classmethod
     def from_images(cls, images: torch.Tensor, num_features=512, patch_size=41, angle_bins=8, spatial_bins=8, batch_size: int = 8, device: str = 'cuda'):
-        descs = MemmapTensor(images.size(0), num_features, 8 * angle_bins * spatial_bins, dtype=torch.float32)
-        kpts = MemmapTensor(images.size(0),num_features,  2, dtype=torch.float32)
+        descs = MemoryMappedTensor.zeros(images.size(0), num_features, 8 * angle_bins * spatial_bins, dtype=torch.float32)
+        kpts = MemoryMappedTensor.zeros(images.size(0),num_features,  2, dtype=torch.float32)
     
         model = sift.SIFT(num_features=num_features, patch_size=patch_size, angle_bins=angle_bins, spatial_bins=spatial_bins)
         model.to(device)
@@ -72,6 +72,10 @@ side_by_side
       0%|          | 0/1 [00:00<?, ?it/s]
 
 
+    /home/zc2309/mambaforge/lib/python3.10/site-packages/kornia/filters/filter.py:129: UserWarning: Plan failed with a cudnnException: CUDNN_BACKEND_EXECUTION_PLAN_DESCRIPTOR: cudnnFinalize Descriptor Failed cudnn_status: CUDNN_STATUS_NOT_SUPPORTED (Triggered internally at /opt/conda/conda-bld/pytorch_1712608935911/work/aten/src/ATen/native/cudnn/Conv_v8.cpp:919.)
+      output = F.conv2d(input, tmp_kernel, groups=tmp_kernel.size(0), padding=0, stride=1)
+
+
 
       0%|          | 0/1 [00:00<?, ?it/s]
 
@@ -80,7 +84,7 @@ side_by_side
 
 
     
-![png](README_files/README_3_2.png)
+![png](README_files/README_3_3.png)
     
 
 
@@ -89,7 +93,7 @@ side_by_side
 ```python
 
 
-tgt_ind, valid = ratio_test_threshold_match(index.desc, query.desc.as_tensor(), 0.75)
+tgt_ind, valid = ratio_test_threshold_match(index.desc, query.desc, 0.75)
 src_kpts = index.pts
 tgt_kpts = query.pts.gather(dim=-2, index=tgt_ind.unsqueeze(-1).expand_as(query.pts))
 pts1 = torch.cat([src_kpts, torch.ones_like(src_kpts[..., [0]])], dim=-1)
@@ -106,10 +110,10 @@ query_pts = tgt_kpts[inliners]
 ```python
 
 
-lines_without_ransac = utils.draw_match_lines(
+lines_with_ransac = utils.draw_match_lines(
     index_image, query_image, index_pts, query_pts
 )
-lines_without_ransac
+lines_with_ransac
 ```
 
 
@@ -120,9 +124,3 @@ lines_without_ransac
     
 
 
-
-
-```python
-%%capture
-!jupyter nbconvert --execute --to markdown README.ipynb
-```
